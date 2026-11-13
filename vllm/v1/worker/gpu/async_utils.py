@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -122,6 +122,7 @@ class AsyncOutput(AsyncModelRunnerOutput):
         copy_stream: torch.cuda.Stream,
         check_ep_fault: bool,
         pending_aux_output: "PendingAuxOutput | None",
+        post_output_fn: Callable[[list[str], list[list[int]]], Any] | None = None,
     ):
         # NOTE(woosuk): We must retain references to the GPU tensors,
         # as the copy operations are performed on a different CUDA stream than
@@ -130,6 +131,8 @@ class AsyncOutput(AsyncModelRunnerOutput):
         self.sampler_output = sampler_output
         self.num_sampled_tokens = num_sampled_tokens
         self.pending_aux_output = pending_aux_output
+        # Whisper word timestamps: per-token start times for finishing requests.
+        self.post_output_fn = post_output_fn
         # Blocking (sleep) event to avoid busy-polling the CUDA driver lock.
         self.copy_event = torch.cuda.Event(blocking=True)
         self._has_fault: torch.Tensor | None = None
@@ -204,6 +207,11 @@ class AsyncOutput(AsyncModelRunnerOutput):
         if self.pending_aux_output is not None:
             self.model_runner_output.aux_output_connector_output = (
                 self.pending_aux_output.process_output()
+            )
+
+        if self.post_output_fn is not None:
+            self.model_runner_output.token_timestamps = self.post_output_fn(
+                self.model_runner_output.req_ids, sampled_token_ids
             )
 
         if self._has_fault is not None and self._has_fault.item():

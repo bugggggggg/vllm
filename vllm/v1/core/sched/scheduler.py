@@ -2282,6 +2282,11 @@ class Scheduler(SchedulerInterface):
                         ec_transfer_params=ec_transfer_params,
                         trace_headers=request.trace_headers,
                         routed_experts=routed_experts,
+                        token_timestamps=(
+                            model_runner_output.token_timestamps.get(req_id)
+                            if model_runner_output.token_timestamps
+                            else None
+                        ),
                         num_nans_in_logits=request.num_nans_in_logits,
                     )
                 )

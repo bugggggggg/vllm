@@ -190,6 +190,8 @@ class RequestState:
 
         # Routed experts accumulation (prompt + sample chunks)
         self.routed_experts_chunks: list[np.ndarray] = []
+        # Whisper word timestamps (per generated token), set on the last output.
+        self.token_timestamps: list[float] | None = None
         self.sampling_mask_chunks: list[SamplingMaskLists] = []
         # (weight version, first output-token index) for each span.
         self.weight_version_starts: list[tuple[str, int]] = []
@@ -472,6 +474,7 @@ class RequestState:
             text=text,
             token_ids=token_ids,
             routed_experts=routed_experts,
+            token_timestamps=self.token_timestamps if finished else None,
             sampling_mask=sampling_mask,
             logprobs=logprobs,
             cumulative_logprob=self.logprobs_processor.cumulative_logprob,
@@ -729,6 +732,8 @@ class OutputProcessor:
                 req_state.routed_experts_chunks.append(
                     engine_core_output.routed_experts
                 )
+            if engine_core_output.token_timestamps is not None:
+                req_state.token_timestamps = engine_core_output.token_timestamps
 
             if req_state.is_prefilling:
                 if engine_core_output.prefill_stats is not None:

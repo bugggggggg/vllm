@@ -279,6 +279,11 @@ class ModelConfig:
     equivalent to setting `-cc.mode=none -cc.cudagraph_mode=none`."""
     return_sampling_mask: bool = False
     """Whether to return the post-processing token support for each sample."""
+    enable_word_timestamps: bool = False
+    """Enable Whisper word-level timestamps. Cross-attention Q/K of the
+    alignment heads are offloaded to host memory and aligned on the CPU when a
+    request finishes; only requests that ask for word timestamps are captured.
+    Changes the traced model, so it is part of the compile-cache hash."""
     max_logprobs: int = Field(default=20, ge=-1)
     """Maximum number of log probabilities to return when `logprobs` is
     specified in `SamplingParams`. The default value comes the default for the

@@ -221,6 +221,9 @@ class EngineCoreOutput(
     prefill_stats: PrefillStats | None = None
 
     routed_experts: np.ndarray | None = None
+    # Whisper word timestamps: start time (s) of each generated token; set on
+    # the final output of requests that asked for word timestamps.
+    token_timestamps: list[float] | None = None
     # The number of NaNs in logits.
     # A value greater than 0 indicates that the output is corrupted.
     num_nans_in_logits: int = 0

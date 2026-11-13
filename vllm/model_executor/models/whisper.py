@@ -44,6 +44,7 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
+from vllm.model_executor.models import whisper_word_timing
 from vllm.model_executor.models.whisper_utils import (
     ISO639_1_SUPPORTED_LANGS,
 )
@@ -300,6 +301,14 @@ class WhisperCrossAttention(WhisperAttention):
             prefix=prefix,
             attn_type=AttentionType.ENCODER_DECODER,
         )
+        # QK offload (word timestamps): decoder layer index, and this layer's
+        # alignment-head indices / first staging column once enabled.
+        try:
+            self.layer_idx = int(prefix.split("layers.")[1].split(".")[0])
+        except (IndexError, ValueError):
+            self.layer_idx = -1
+        self.align_heads: torch.Tensor | None = None
+        self.align_col0 = 0
 
     def _init_qkv(
         self,
@@ -340,6 +349,9 @@ class WhisperCrossAttention(WhisperAttention):
             k, v = kv.split([self.kv_size, self.kv_size], dim=-1)
         else:
             k = v = None
+
+        if whisper_word_timing.ENABLED and self.align_heads is not None:
+            whisper_word_timing.stage(q, k, self.align_heads, self.align_col0)
 
         attn_output = self.attn(q, k, v)
 
@@ -828,6 +840,7 @@ class WhisperForConditionalGeneration(
     # Whisper only supports audio-conditioned generation.
     supports_transcription_only = True
     supports_segment_timestamp = True
+    supports_qk_offload_word_timestamps = True
     supports_explicit_language_detection = True
     supported_languages = ISO639_1_SUPPORTED_LANGS
 
@@ -1000,12 +1013,67 @@ class WhisperForConditionalGeneration(
         )
         return decoder_outputs
 
+    def enable_qk_offload(
+        self,
+        alignment_heads: list[list[int]],
+        max_tokens: int,
+        max_items: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Stage alignment-head Q/K for word timestamps; return the buffers.
+
+        Must run before compilation / CUDA-graph capture, since it changes the
+        traced cross-attention forward.
+        """
+        cfg = self.config
+        n_heads = cfg.decoder_attention_heads
+        head_dim = cfg.d_model // n_heads
+        by_layer: dict[int, list[int]] = {}
+        for layer, head in sorted((int(lh[0]), int(lh[1])) for lh in alignment_heads):
+            by_layer.setdefault(layer, []).append(head)
+        col = 0
+        for module in self.modules():
+            if not isinstance(module, WhisperCrossAttention):
+                continue
+            heads = by_layer.get(module.layer_idx)
+            if heads is None:
+                continue
+            if module.num_heads != n_heads:
+                raise NotImplementedError(
+                    "Whisper word timestamps (QK offload) need TP=1."
+                )
+            module.align_heads = torch.tensor(heads, device=device, dtype=torch.long)
+        # Assign columns in layer order so they match sorted (layer, head).
+        for layer in sorted(by_layer):
+            for module in self.modules():
+                if isinstance(module, WhisperCrossAttention) and (
+                    module.layer_idx == layer
+                ):
+                    module.align_col0 = col
+            col += len(by_layer[layer])
+        max_frames = int(cfg.max_source_positions)
+        return whisper_word_timing.allocate(
+            n_align_heads=col,
+            head_dim=head_dim,
+            max_tokens=max_tokens,
+            max_k_frames=max_items * max_frames,
+            max_items=max_items,
+            max_frames=max_frames,
+            device=device,
+            dtype=dtype,
+        )
+
     def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings:
         # Required as part of SupportsMultiModal interface.
         audio_input = self._parse_and_validate_audio_input(**kwargs)
         # Split concatenated encoder outputs into one tensor per audio input
         enc_output = self.model.get_encoder_outputs(audio_input["input_features"])
         assert enc_output is not None
+        if whisper_word_timing.ENABLED:
+            whisper_word_timing.record_real_frames(
+                audio_input["input_features"], self.config.max_source_positions
+            )
         # The assumption is we can only process whole mm items (audios)
         return enc_output.unbind(dim=0)
 

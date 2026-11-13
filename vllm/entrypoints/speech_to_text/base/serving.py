@@ -31,9 +31,13 @@ from vllm.inputs import EncoderDecoderInput, EngineInput
 from vllm.logger import init_logger
 from vllm.logprobs import FlatLogprobs, Logprob
 from vllm.model_executor.models import SupportsTranscription
+from vllm.model_executor.models.whisper_word_timing import (
+    NO_SPACE_LANGUAGES,
+    split_words,
+)
 from vllm.multimodal.audio import get_audio_duration, split_audio
 from vllm.multimodal.media.audio import load_audio
-from vllm.outputs import RequestOutput
+from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.renderers.inputs import DictPrompt, EncoderDecoderDictPrompt
 from vllm.renderers.inputs.preprocess import parse_enc_dec_prompt, parse_model_prompt
 from vllm.sampling_params import BeamSearchParams, SamplingParams
@@ -47,6 +51,7 @@ from ..transcription.protocol import (
     TranscriptionResponseVerbose,
     TranscriptionSegment,
     TranscriptionStreamResponse,
+    TranscriptionWord,
 )
 from ..translation.protocol import (
     TranslationResponse,
@@ -418,6 +423,30 @@ class SpeechToTextBaseServing(GenerateBaseServing):
                 avg_logprob += log_probs[idx - 1][token].logprob
         return segments
 
+    def _get_words(
+        self, output: CompletionOutput, request: SpeechToTextRequest, offset: float
+    ) -> list[TranscriptionWord] | None:
+        """Word timings from the engine's per-token start times, or ``None``
+        if the server was not started with ``--enable-word-timestamps``."""
+        if output.token_timestamps is None:
+            logger.warning_once(
+                "Word timestamps were requested but not computed; start the "
+                "server with --enable-word-timestamps."
+            )
+            return None
+        words = split_words(
+            self.tokenizer,
+            list(output.token_ids),
+            output.token_timestamps,
+            eot_token_id=self.tokenizer.eos_token_id,
+            split_on_characters=request.language in NO_SPACE_LANGUAGES,
+            offset=offset,
+        )
+        return [
+            TranscriptionWord(word=w, start=round(s, 3), end=round(e, 3))
+            for w, s, e in words
+        ]
+
     async def _create_speech_to_text(
         self,
         audio_data: bytes,
@@ -528,6 +557,20 @@ class SpeechToTextBaseServing(GenerateBaseServing):
         if request.response_format == "verbose_json":
             sampling_params.logprobs = 1
 
+        want_words = (
+            self.task_type == "transcribe"
+            and request.response_format == "verbose_json"
+            and "word" in (getattr(request, "timestamp_granularities", None) or [])
+            and getattr(self.model_cls, "supports_qk_offload_word_timestamps", False)
+            and not isinstance(sampling_params, BeamSearchParams)
+        )
+        if want_words:
+            # Per-request opt-in: only these requests are captured and aligned.
+            sampling_params.extra_args = {
+                **(sampling_params.extra_args or {}),
+                "word_timestamps": True,
+            }
+
         engine_request_ids = [
             request_id if len(engine_inputs) == 1 else f"{request_id}-{idx}"
             for idx in range(len(engine_inputs))
@@ -598,6 +641,10 @@ class SpeechToTextBaseServing(GenerateBaseServing):
                 [] for _ in list_result_generator
             ]
             chunk_text_parts: list[list[str]] = [[] for _ in list_result_generator]
+            chunk_word_parts: list[list[TranscriptionWord]] = [
+                [] for _ in list_result_generator
+            ]
+            missing_words = False
             segments_types: dict[str, type[SpeechToTextSegment]] = {
                 "transcribe": TranscriptionSegment,
                 "translate": TranslationSegment,
@@ -624,6 +671,12 @@ class SpeechToTextBaseServing(GenerateBaseServing):
 
                     chunk_segment_parts[idx].extend(segments)
                     chunk_text_parts[idx].extend([seg.text for seg in segments])
+                    if want_words:
+                        words = self._get_words(op.outputs[0], request, start_time)
+                        if words is None:
+                            missing_words = True
+                        else:
+                            chunk_word_parts[idx].extend(words)
                 else:
                     raw_text = op.outputs[0].text
                     chunk_text_parts[idx].append(
@@ -682,6 +735,11 @@ class SpeechToTextBaseServing(GenerateBaseServing):
                             language=request.language,
                             duration=duration_s,
                             segments=total_segments,
+                            words=(
+                                [w for part in chunk_word_parts for w in part]
+                                if want_words and not missing_words
+                                else None
+                            ),
                         ),
                     )
             else:

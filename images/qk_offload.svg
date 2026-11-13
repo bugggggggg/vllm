@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="370" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" viewBox="0 0 1000 370" role="img" aria-labelledby="ttl desc">
+  <title id="ttl">QK offload in Whisper's encoder-decoder</title>
+  <desc id="desc">The encoder output gives the cross-attention keys, whose alignment heads are
+  copied to CPU memory once per request. Each decoder step produces a cross-attention query,
+  whose alignment heads are copied to CPU memory every step. When the request ends, the CPU
+  computes Q·Kᵀ and DTW to get word timestamps.</desc>
+  <style>
+  svg {
+    --ink: #1f2933;
+    --muted: #52606d;
+    --arrow: #3e4c59;
+    --gpu-fill: #eef7ee;
+    --gpu-line: #6aa86a;
+    --cpu-fill: #edf2fb;
+    --cpu-line: #6b93cf;
+    --q: #e8761b;
+    --k: #f3b27a;
+    --hot-fill: #fde8d3;
+    --box-line: #9aa5b1;
+  }
+  .lane { font-size: 20px; font-weight: 700; fill: #ffffff; letter-spacing: .04em; }
+  .t { font-size: 16px; fill: var(--ink); }
+  .b { font-size: 18px; font-weight: 600; fill: var(--ink); }
+  .s { font-size: 14px; fill: var(--muted); }
+  .qk { font-size: 16px; font-weight: 700; fill: #ffffff; }
+  .arrow { stroke: var(--arrow); stroke-width: 2; fill: none; marker-end: url(#ah); }
+  .box { fill: #ffffff; stroke: var(--box-line); stroke-width: 1.4; }
+  .chip { fill: #ffffff; stroke: var(--arrow); stroke-width: 1.4; stroke-dasharray: 5 3; }
+  </style>
+  <rect width="1000" height="370" fill="#ffffff"/>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3e4c59"/>
+    </marker>
+  </defs>
+
+  <!-- ===================== GPU lane ===================== -->
+  <rect x="10" y="10" width="980" height="160" rx="14" fill="var(--gpu-fill)" stroke="var(--gpu-line)" stroke-width="1.6"/>
+  <path d="M24,10 H62 V170 H24 A14,14 0 0 1 10,156 V24 A14,14 0 0 1 24,10 Z" fill="var(--gpu-line)"/>
+  <text x="36" y="90" class="lane" text-anchor="middle" transform="rotate(-90 36 90)">GPU</text>
+
+  <!-- encoder side -->
+  <rect x="80" y="64" width="70" height="50" rx="8" class="box"/>
+  <path d="M88,89 L95,89 L99,75 L104,103 L109,79 L114,97 L119,71 L124,106 L129,82 L134,93 L139,89 L143,89"
+        stroke="var(--arrow)" stroke-width="1.6" fill="none" stroke-linejoin="round"/>
+  <text x="115" y="136" class="s" text-anchor="middle">audio</text>
+  <path d="M150,89 L172,89" class="arrow"/>
+
+  <rect x="174" y="52" width="112" height="74" rx="10" fill="#ffffff" stroke="var(--gpu-line)" stroke-width="1.6"/>
+  <text x="230" y="95" class="b" text-anchor="middle">Encoder</text>
+  <path d="M286,89 L304,89" class="arrow"/>
+
+  <text x="366" y="62" class="s" text-anchor="middle">audio frames</text>
+  <g transform="translate(306,72)">
+    <rect width="120" height="34" rx="5" fill="var(--k)"/>
+    <path d="M12,0 V34 M24,0 V34 M36,0 V34 M48,0 V34 M60,0 V34 M72,0 V34 M84,0 V34 M96,0 V34 M108,0 V34"
+          stroke="#ffffff" stroke-width="1" opacity=".7"/>
+    <text x="60" y="23" class="qk" text-anchor="middle" style="fill:var(--ink)">K</text>
+  </g>
+  <path d="M426,89 L452,89" stroke="var(--arrow)" stroke-width="1.8" stroke-dasharray="5 4" fill="none" marker-end="url(#ah)"/>
+
+  <!-- decoder side -->
+  <rect x="454" y="22" width="458" height="136" rx="12" fill="#f8fcf8" stroke="var(--gpu-line)" stroke-width="1.6"/>
+  <text x="470" y="48" class="b">Decoder</text>
+
+  <g transform="translate(470,62)">
+    <rect width="130" height="84" rx="9" class="box"/>
+    <text x="65" y="28" class="t" text-anchor="middle">"and"</text>
+    <rect x="43" y="44" width="44" height="28" rx="4" fill="var(--q)"/>
+    <text x="65" y="64" class="qk" text-anchor="middle">Q</text>
+  </g>
+  <path d="M600,104 L614,104" class="arrow"/>
+  <g transform="translate(616,62)">
+    <rect width="130" height="84" rx="9" class="box"/>
+    <text x="65" y="28" class="t" text-anchor="middle">"depending"</text>
+    <rect x="43" y="44" width="44" height="28" rx="4" fill="var(--q)"/>
+    <text x="65" y="64" class="qk" text-anchor="middle">Q</text>
+  </g>
+  <path d="M746,104 L760,104" class="arrow"/>
+  <g transform="translate(762,62)">
+    <rect width="130" height="84" rx="9" class="box"/>
+    <text x="65" y="28" class="t" text-anchor="middle" style="fill:var(--q);font-weight:700">EOS</text>
+    <rect x="43" y="44" width="44" height="28" rx="4" fill="var(--q)"/>
+    <text x="65" y="64" class="qk" text-anchor="middle">Q</text>
+  </g>
+
+  <!-- ===================== copies GPU -> CPU ===================== -->
+  <path d="M366,106 L366,238" class="arrow"/>
+  <rect x="336" y="180" width="60" height="30" rx="7" class="chip"/>
+  <text x="366" y="201" class="t" text-anchor="middle">D2H</text>
+  <text x="404" y="201" class="s">once</text>
+
+  <path d="M535,134 L535,238" class="arrow"/>
+  <path d="M681,134 L681,238" class="arrow"/>
+  <path d="M827,134 L827,238" class="arrow"/>
+  <rect x="505" y="180" width="60" height="30" rx="7" class="chip"/>
+  <text x="535" y="201" class="t" text-anchor="middle">D2H</text>
+  <rect x="651" y="180" width="60" height="30" rx="7" class="chip"/>
+  <text x="681" y="201" class="t" text-anchor="middle">D2H</text>
+  <rect x="797" y="180" width="60" height="30" rx="7" class="chip"/>
+  <text x="827" y="201" class="t" text-anchor="middle">D2H</text>
+  <text x="866" y="201" class="s">every step</text>
+
+  <!-- ===================== CPU lane ===================== -->
+  <rect x="10" y="222" width="980" height="138" rx="14" fill="var(--cpu-fill)" stroke="var(--cpu-line)" stroke-width="1.6"/>
+  <path d="M24,222 H62 V360 H24 A14,14 0 0 1 10,346 V236 A14,14 0 0 1 24,222 Z" fill="var(--cpu-line)"/>
+  <text x="36" y="291" class="lane" text-anchor="middle" transform="rotate(-90 36 291)">CPU</text>
+
+  <rect x="292" y="232" width="572" height="62" rx="10" fill="none" stroke="var(--cpu-line)" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <g transform="translate(306,246)">
+    <rect width="120" height="34" rx="5" fill="var(--k)"/>
+    <path d="M12,0 V34 M24,0 V34 M36,0 V34 M48,0 V34 M60,0 V34 M72,0 V34 M84,0 V34 M96,0 V34 M108,0 V34"
+          stroke="#ffffff" stroke-width="1" opacity=".7"/>
+    <text x="60" y="23" class="qk" text-anchor="middle" style="fill:var(--ink)">K</text>
+  </g>
+  <rect x="513" y="246" width="44" height="34" rx="4" fill="var(--q)"/>
+  <text x="535" y="269" class="qk" text-anchor="middle">Q</text>
+  <rect x="659" y="246" width="44" height="34" rx="4" fill="var(--q)"/>
+  <text x="681" y="269" class="qk" text-anchor="middle">Q</text>
+  <rect x="805" y="246" width="44" height="34" rx="4" fill="var(--q)"/>
+  <text x="827" y="269" class="qk" text-anchor="middle">Q</text>
+  <text x="292" y="320" class="s">QK cache (alignment heads only)</text>
+
+  <path d="M864,263 L878,263" class="arrow"/>
+  <rect x="880" y="232" width="100" height="84" rx="10" fill="var(--hot-fill)" stroke="var(--q)" stroke-width="1.6"/>
+  <text x="930" y="260" class="t" text-anchor="middle">Q·Kᵀ</text>
+  <text x="930" y="280" class="t" text-anchor="middle">→ DTW</text>
+  <text x="930" y="304" class="b" text-anchor="middle" style="font-size:16px">word times</text>
+</svg>
